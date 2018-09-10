@@ -1,0 +1,180 @@
+{\rtf1\ansi\ansicpg1252\cocoartf1561\cocoasubrtf400
+{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww10800\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 //show schemas;\
+//show views in EVENT;\
+//desc view EVENT.EVENTS;\
+//select * from EVENT.EVENTS limit 20;\
+//select * from EVENT.EVENTS where EVENTTYPE='Search' and DIMDATEKEY = 20180515 limit 20;\
+\
+--------------------------------------------------------------------------------------------------------------------\
+\
+// COUNTING MOST FREQUENT STRING SEARCHED ON GIVEN DATE\
+select QueryString, count(*) from EVENT.EVENTS\
+where EVENTTYPE='Search' and DIMDATEKEY = 20180601 and Placement = 'Keyword Search'\
+group by 1\
+order by 2 desc;\
+\
+--------------------------------------------------------------------------------------------------------------------\
+\
+// COUNTING MOST FREQUENT STRING SEARCHED FROM DATE\
+select QUERYSTRING, count(*) from EVENT.EVENTS\
+where EVENTTYPE='Search' and DIMDATEKEY > 20180515 and Placement = 'Keyword Search'\
+group by 1\
+order by 2 desc;\
+\
+--------------------------------------------------------------------------------------------------------------------\
+\
+// UNFULFILLMENT-REGISTRATION ANALYSIS\
+select count(*), 'null_results_registered' as fulfillment \
+from EVENT.EVENTS \
+where EVENTTYPE='Search' and DIMDATEKEY = 20180601 and JOBSEEKERID is not NULL and Placement = 'Keyword Search' and POSTINGID is NULL\
+union\
+select count(*), 'null_results_unregistered' as fulfillment \
+from EVENT.EVENTS \
+where EVENTTYPE='Search' and DIMDATEKEY = 20180601 and Placement = 'Keyword Search' and JOBSEEKERID is NULL and POSTINGID is NULL\
+union\
+select count(*), 'valid_results_registered' as fulfillment\
+from EVENT.EVENTS \
+where EVENTTYPE='Search' and DIMDATEKEY = 20180601 and Placement = 'Keyword Search' and POSTINGID is not NULL and JOBSEEKERID is not NULL\
+union\
+select count(*), 'valid_results_unregistered' as fulfillment\
+from EVENT.EVENTS \
+where EVENTTYPE='Search' and DIMDATEKEY = 20180601 and Placement = 'Keyword Search' and POSTINGID is not NULL and JOBSEEKERID is NULL;\
+\
+// USING CASE STATEMENTS AND COUNTS FOR UNFULFILLMENT/REGISTRATION ANALYSIS\
+select DIMDATEKEY,\
+    count(case when (POSTINGID is not NULL and JOBSEEKERID is NULL) then 1 end) as unregistered_valid_query_return,\
+    count(case when (POSTINGID is not NULL and JOBSEEKERID is not NULL) then 1 end) as registered_valid_query_return,\
+    count(case when (POSTINGID is NULL and JOBSEEKERID is NULL and PAGENUMBER <= 1) then 1 end) as unregistered_null_query_return,\
+    count(case when (POSTINGID is NULL and JOBSEEKERID is not NULL and PAGENUMBER <= 1) then 1 end) as registered_null_query_return\
+from EVENT.EVENTS where EVENTTYPE='Search' and Placement = 'Keyword Search' and DIMDATEKEY >= 20180526\
+group by DIMDATEKEY\
+order by DIMDATEKEY;\
+\
+--------------------------------------------------------------------------------------------------------------------\
+\
+// COUNTING REGISTERED VS UNREGISTERED USERS\
+select count(*), 'registered user' as users\
+from EVENT.EVENTS \
+where EVENTTYPE='Search' and DIMDATEKEY = 20180601 and JOBSEEKERID is not NULL\
+union\
+select count(*), 'unregistered user' as users\
+from EVENT.EVENTS \
+where EVENTTYPE='Search' and DIMDATEKEY = 20180601 and JOBSEEKERID is NULL;\
+\
+\
+// COUNTING REGISTERED VS UNREGISTERED USERS PER DAY\
+select DIMDATEKEY,\
+    count(case when JOBSEEKERID is not NULL then 1 end) as registered_users,\
+    count(case when JOBSEEKERID is NULL then 1 end) as unregistered_users\
+from EVENT.EVENTS \
+where EVENTTYPE='Search' and DIMDATEKEY > 20180301\
+group by DIMDATEKEY\
+order by DIMDATEKEY;\
+\
+--------------------------------------------------------------------------------------------------------------------\
+\
+// EDA OF QUERYSTRING\
+select Querystring, REGEXP_COUNT(QUERYSTRING, '(s=)', 1) as equals_count from EVENT.EVENTS\
+where EVENTTYPE='Search' and Placement = 'Keyword Search' and DIMDATEKEY >= 20180604 and QUERYSTRING is not NULL limit 20;\
+\
+\
+// COUNTING DIFFERENT TYPES OF QUERIES PER PERIOD\
+select\
+    count(*) as total_valid_searches,\
+    count(case when ((REGEXP_COUNT(QUERYSTRING, '\\\\b=\\\\b', 1) = 1 and REGEXP_COUNT(QUERYSTRING, '\\\\bw=\\\\b', 1) = 1) // when the only element is w\
+                      or (REGEXP_COUNT(QUERYSTRING, '\\\\b=\\\\b', 1) < 3 and REGEXP_COUNT(QUERYSTRING, '\\\\bl=\\\\b', 1) = 1) // when the query contains l\
+                      or (REGEXP_COUNT(QUERYSTRING, '\\\\b=\\\\b', 1) < 3 and REGEXP_COUNT(QUERYSTRING, '\\\\bs=\\\\b', 1) = 1)) // when the query contains s\
+                      then 1 end) as location_only_search,     \
+    count(case when (REGEXP_COUNT(QUERYSTRING, '\\\\bw=\\\\b', 1) = 0 \
+                     and REGEXP_COUNT(QUERYSTRING, '\\\\bl=\\\\b', 1) = 0 \
+                     and REGEXP_COUNT(QUERYSTRING, '\\\\bs=\\\\b', 1) = 0) // when no w or l or s\
+                     then 1 end) as keyword_only_search\
+from EVENT.EVENTS where EVENTTYPE='Search' and Placement = 'Keyword Search' and DIMDATEKEY = 20180601 and QUERYSTRING is not NULL;\
+\
+\
+// COUNTING DIFFERENT TYPES OF QUERIES PER DAY\
+select DIMDATEKEY,\
+    count(*) as total_valid_searches,\
+    count(case when ((REGEXP_COUNT(QUERYSTRING, '\\\\b=\\\\b', 1) = 1 and REGEXP_COUNT(QUERYSTRING, '\\\\bw=\\\\b', 1) = 1) // when the only element is w\
+                      or (REGEXP_COUNT(QUERYSTRING, '\\\\b=\\\\b', 1) < 3 and REGEXP_COUNT(QUERYSTRING, '\\\\bl=\\\\b', 1) = 1) // when the query contains l\
+                      or (REGEXP_COUNT(QUERYSTRING, '\\\\b=\\\\b', 1) < 3 and REGEXP_COUNT(QUERYSTRING, '\\\\bs=\\\\b', 1) = 1)) // when the query contains s\
+                      then 1 end) as location_only_search,     \
+    count(case when (REGEXP_COUNT(QUERYSTRING, '\\\\bw=\\\\b', 1) = 0 \
+                     and REGEXP_COUNT(QUERYSTRING, '\\\\bl=\\\\b', 1) = 0 \
+                     and REGEXP_COUNT(QUERYSTRING, '\\\\bs=\\\\b', 1) = 0) // when no w or l or s\
+                     then 1 end) as keyword_only_search\
+from EVENT.EVENTS where EVENTTYPE='Search' and Placement = 'Keyword Search' and DIMDATEKEY >= 20180604 and QUERYSTRING is not NULL\
+group by DIMDATEKEY\
+order by DIMDATEKEY;\
+\
+--------------------------------------------------------------------------------------------------------------------\
+\
+// COUNTING DIFFERENT PLATFORMS\
+select SOURCE, count(*) as FREQUENCY from EVENT.EVENTS\
+where EVENTTYPE='Search' and DIMDATEKEY > 20180604 and Placement = 'Keyword Search'\
+group by SOURCE\
+order by FREQUENCY desc;\
+\
+\
+// COUNTING DIFFERENT PLATFORMS GROUPED BY DAY\
+select DIMDATEKEY,\
+    count(case when SOURCE = 'Sommersault' then 1 end) as sommersault,\
+    count(case when SOURCE = 'Sommersault Mobile' then 1 end) as sommersault_mobile,\
+    count(case when SOURCE = 'Sommersault iOS' then 1 end) as sommersault_ios,\
+    count(case when SOURCE = 'Career Pages' then 1 end) as career_pages\
+from EVENT.EVENTS where EVENTTYPE='Search' and Placement = 'Keyword Search' and DIMDATEKEY >= 20180601\
+group by DIMDATEKEY\
+order by DIMDATEKEY;\
+\
+--------------------------------------------------------------------------------------------------------------------\
+\
+// COUNTING MOST FREQUENT STRING SEARCHED ON GIVEN DATE, USE REGEX TO FIND REFERRING WEBSITES THAT CONTAIN GOOGLE\
+select QUERYSTRING, count(*) from EVENT.EVENTS \
+where DIMDATEKEY = 20180602 and EVENTTYPE='Search' and REFCODE='natgoogle' //and PLACEMENT = 'Keyword Search'\
+group by 1\
+order by 2 desc;\
+\
+--------------------------------------------------------------------------------------------------------------------\
+\
+// EDA\
+select * from EVENT.EVENTS \
+where DIMDATEKEY = 20180602 and EVENTTYPE='Search' and REFCODE='natgoogle' limit 50;\
+\
+\
+// EDA\
+select PLACEMENT, count(*) from EVENT.EVENTS \
+where DIMDATEKEY = 20180602 and EVENTTYPE='Search' and REFCODE='natgoogle'\
+group by 1\
+order by 2 desc;\
+\
+\
+// USING CASE STATEMENTS AND COUNTS FOR GOOGLE TRAFFIC ANALYSIS\
+select DIMDATEKEY,\
+    count(case when (PLACEMENT='Keyword Search' or PLACEMENT='Home Page' or PLACEMENT='Search Results') then 1 end) as google_to_search,\
+    count(case when (PLACEMENT='Company Overview') then 1 end) as google_to_job\
+from EVENT.EVENTS //where EVENTTYPE='Search'\
+where DIMDATEKEY >= 20180602 and REFCODE='natgoogle'\
+group by DIMDATEKEY\
+order by DIMDATEKEY;\
+\
+\
+// EDA SESSIONID BOUNCE RATE ANALYSIS\
+select SESSIONID, \
+count(case when EVENTTYPE = 'Page View' then 1 end) as num_page_view\
+from EVENT.EVENTS \
+where DIMDATEKEY=20180604 and SESSIONID is not NULL and SESSIONID<>'00000000-0000-0000-0000-000000000000'\
+group by 1\
+order by 2 desc;\
+\
+\
+// EDA SESSIONID BOUNCE RATE ANALYSIS, THIS IS FOR NON-GOOGLE USERS\
+// THIS IS THE MOST IMPORTANT QUERY\
+select a.DIMDATEKEY,\
+    count(case when NUM_PAGE_VIEW > 1 then 1 end) as NO_BOUNCE_USER,\
+    count(case when NUM_PAGE_VIEW <= 1 then 1 end) as BOUNCE_USER}

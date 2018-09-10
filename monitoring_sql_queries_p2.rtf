@@ -1,0 +1,263 @@
+{\rtf1\ansi\ansicpg1252\cocoartf1561\cocoasubrtf400
+{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww10800\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 // Looking at Google jobs widget activity hourly per day\
+\
+select extract(Hour from TIME), DATE, Count(*) NUM_SESSIONS   \
+FROM (select a.SESSIONID, a.DIMDATEKEY as DATE, e.EVENTTYPE, e.PLACEMENT, e.REFERRINGURL, e.POSTINGID, e.EVENTTIME as TIME,\
+e.SESSIONPARENTEVENTID, e.SESSIONEVENTID\
+from (select SESSIONID, DIMDATEKEY\
+      from EVENT.EVENTS\
+      where\
+      DIMDATEKEY = 20180610\
+      and SESSIONID is not NULL and SESSIONID<>'00000000-0000-0000-0000-000000000000'\
+      and contains(REFERRINGURL, 'google.com') and EVENTTYPE='Posting Detail Impression') as a\
+LEFT JOIN (select *\
+          from EVENT.EVENTS\
+          where\
+          DIMDATEKEY = 20180610\
+          and SESSIONID is not NULL\
+          and SESSIONID<>'00000000-0000-0000-0000-000000000000') as e\
+ON a.SESSIONID = e.SESSIONID)\
+GROUP BY 1, 2\
+ORDER BY 2, 1;\
+\
+desc view event.events;\
+------------------------------------------------------------------------------------------------------------------------------------\
+// EDA FOR EVENTS DATABASE TO TRY AND INFER ORDER AND SIGNIFICANCE OF EVENTS\
+\
+select a.SESSIONID, a.DIMDATEKEY, e.EVENTTYPE, e.PLACEMENT, e.REFERRINGURL, e.POSTINGID, e.EVENTTIME, e.SEQUENCE,\
+e.SESSIONPARENTEVENTID, e.SESSIONEVENTID\
+from (select SESSIONID, DIMDATEKEY\
+      from EVENT.EVENTS\
+      where DIMDATEKEY=20180604 and SESSIONID is not NULL and SESSIONID<>'00000000-0000-0000-0000-000000000000'\
+      and contains(REFERRINGURL, 'google.com') and EVENTTYPE='Posting Detail Impression') as a\
+LEFT JOIN (select *\
+          from EVENT.EVENTS\
+          where DIMDATEKEY=20180604 and SESSIONID is not NULL\
+          and SESSIONID<>'00000000-0000-0000-0000-000000000000') as e\
+ON a.SESSIONID = e.SESSIONID;\
+------------------------------------------------------------------------------------------------------------------------------------\
+// THIS IS FOR BOUNCE RATE OF GOOGLE-INITIATED SESSIONS THAT LAND ON A JOB DETAILS PAGE\
+\
+select final.DIMDATEKEY,\
+    count(case when NUM_PAGE_VIEW = 1 or (NUM_PAGE_VIEW > 1 and NUM_POSTING = NUM_PAGE_VIEW)\
+          then 1 end) as BOUNCE_USER,\
+    count(case when NUM_PAGE_VIEW > 1 and NUM_POSTING > NUM_PAGE_VIEW then 1 end) as NO_BOUNCE_USER\
+from (select SESSIONID, DIMDATEKEY,\
+        count(case when EVENTTYPE = 'Page View' then 1 end) as NUM_PAGE_VIEW,\
+        count(case when POSTINGID is NULL then 0 else array_size(split(POSTINGID, ',')) end) as NUM_POSTING\
+        from (select a.SESSIONID, a.DIMDATEKEY, e.EVENTTYPE, e.PLACEMENT, e.REFERRINGURL, e.POSTINGID, e.EVENTTIME\
+            from (select SESSIONID, DIMDATEKEY\
+                  from EVENT.EVENTS\
+                  where DIMDATEKEY >= 20180604 and SESSIONID is not NULL \
+                  and SESSIONID <> '00000000-0000-0000-0000-000000000000'\
+                  and contains(REFERRINGURL, 'google.com') and EVENTTYPE = 'Posting Detail Impression') as a\
+            left join (select * from EVENT.EVENTS\
+                       where DIMDATEKEY >= 20180604 and SESSIONID is not NULL\
+                       and SESSIONID <> '00000000-0000-0000-0000-000000000000') as e\
+            on a.SESSIONID = e.SESSIONID) as j\
+      group by SESSIONID, DIMDATEKEY) as final \
+group by 1\
+order by 1;\
+\
+\
+------------------------------------------------------------------------------------------------------------------------------------\
+// TO GROUP LOCATION AND KEYWORD+LOCATION SEARCH EVENTS BY MSA BY DAY\
+\
+select MSACODE, count(*) as NUM_SEARCHES --, DATE\
+from \
+(select postal.POSTINGID as POSTINGID, postal_to_msa.MSACODE as MSACODE --postal.DIMDATEKEY as DATE, \
+from PROD_SAJ_SHARE.DBO.DIMLOCATION as postal_to_msa\
+right join (select first_posting.POSTINGID, posting_to_postal.POSTALCODE --first_posting.DIMDATEKEY,\
+            from (select regexp_substr(POSTINGID, '([0-9]+)', 1, 1) as POSTINGID --, DIMDATEKEY\
+                  from EVENT.EVENTS \
+                  where EVENTTYPE='Search' and PLACEMENT = 'Keyword Search' and DIMDATEKEY = 20180601 \
+                  and POSTINGID is not NULL and (REGEXP_COUNT(QUERYSTRING, '(w=)', 1) <> 0 \
+                  or REGEXP_COUNT(QUERYSTRING, '(l=)', 1) <> 0 or REGEXP_COUNT(QUERYSTRING, '(s=)', 1) <> 0)) \
+            as first_posting\
+            left join PROD_SAJ_SHARE.CUSTOMER.DIMJOBPOSTING_VIEW as posting_to_postal\
+            on first_posting.POSTINGID = posting_to_postal.POSTINGID) as postal\
+on postal.POSTALCODE = postal_to_msa.POSTALCODE)\
+group by 1\
+order by 2 desc;\
+\
+\
+------------------------------------------------------------------------------------------------------------------------------------\
+// TO GROUP ACTIVE JOB POSTINGS BY FIPS BY DAY (POSTINGS WITH DEACTIVATION DATE > CURRENT TIMESTAMP) --- \
+// KEEP HONEYPOT ANS SUPPRESSION IN MIND, ANY JOB DEACTIVATING IN THE FUTURE IS ACTIVE\
+\
+\
+select FIPSCODE, count(*) as NUM_POSTINGS\
+from \
+(select posting_postal.POSTINGID as POSTINGID, postal_to_fips.AREAFIPSCODE as FIPSCODE\
+from PROD_SAJ_SHARE.DBO.DIMLOCATION postal_to_fips\
+right join (select POSTINGID, POSTALCODE\
+            from CUSTOMER.DIMJOBPOSTING_VIEW\
+            where DEACTIVATIONDATE > to_timestamp('2018-06-08 00:00:00')\
+            and CREATEDATE < to_timestamp('2018-06-08 00:00:00')) as posting_postal\
+on posting_postal.POSTALCODE = postal_to_fips.POSTALCODE)\
+group by 1\
+order by 2 desc;\
+\
+desc view PROD_SAJ_SHARE.DBO.DIMLOCATION;\
+select * from PROD_SAJ_SHARE.DBO.DIMLOCATION limit 5;\
+\
+\
+------------------------------------------------------------------------------------------------------------------------------------\
+\
+select * from event.events where EVENTTYPE='Page View' limit 20;\
+\
+select * from dbo.dimlocation limit 20;\
+\
+desc view customer.dimjobposting_view;\
+\
+select * from customer.dimjobposting_view where CREATEDATE > to_timestamp('2018-06-08 00:00:00') limit 5;\
+\
+\
+------------------------------------------------------------------------------------------------------------------------------------\
+// TRYING TO WRITE QUERY FOR GOOGLE INITIATED SESSIONS THAT LANDED ON THE SEARCH PAGE SEARCH --- MERGE THIS QUERY WITH THE ONE FOR\
+// EVENTS THAT LAND ON JOB DETAILS PAGES\
+\
+// EVERY TIME A PAGE IS OPENED, AT LEAST 2 EVENTS ARE FIRED -- REMEMBER THIS\
+\
+\
+select --SESSIONID, DIMDATEKEY,\
+      DIMDATEKEY, count(*)\
+//        count(case when EVENTTYPE = 'Page View' then 1 end) as NUM_PAGE_VIEW,\
+//        count(case when contains(REFERRINGURL, 'google.com') \
+//              and EVENTTYPE = 'Page View' then 1 end) as NUM_OPENED_WINDOWS_GOOGLE,\
+//        count(case when POSTINGID is NULL then 0 else array_size(split(POSTINGID, ',')) end) as NUM_POSTING\
+from (select a.SESSIONID, a.DIMDATEKEY, e.EVENTTYPE, e.PLACEMENT, e.REFERRINGURL, e.POSTINGID, e.EVENTTIME\
+      from (select SESSIONID, DIMDATEKEY\
+            from EVENT.EVENTS\
+            where DIMDATEKEY = 20180611 and SESSIONID is not NULL\
+            and SESSIONID <> '00000000-0000-0000-0000-000000000000' and\
+            contains(REFERRINGURL, 'google.com') and EVENTTYPE = 'Posting Detail Impression') as a\
+       left join (select * from EVENT.EVENTS\
+                  where DIMDATEKEY = 20180611 and SESSIONID is not NULL\
+                  and SESSIONID <> '00000000-0000-0000-0000-000000000000') as e\
+      on a.SESSIONID = e.SESSIONID) as j\
+group by --SESSIONID, DIMDATEKEY\
+DIMDATEKEY;\
+--order by 4, 3;\
+\
+------------------------------------------------------------------------------------------------------------------------------------\
+// COUNTING NUMBER OF SESSION FROM GOOGLE LANDING ON A JOB DETAILS PAGE PER DAY\
+\
+select --SESSIONID, DIMDATEKEY,\
+      DIMDATEKEY, count(*)\
+//        count(case when EVENTTYPE = 'Page View' then 1 end) as NUM_PAGE_VIEW,\
+//        count(case when contains(REFERRINGURL, 'google.com') \
+//              and EVENTTYPE = 'Page View' then 1 end) as NUM_OPENED_WINDOWS_GOOGLE,\
+//        count(case when POSTINGID is NULL then 0 else array_size(split(POSTINGID, ',')) end) as NUM_POSTING\
+from (select a.SESSIONID, a.DIMDATEKEY, e.EVENTTYPE, e.PLACEMENT, e.REFERRINGURL, e.POSTINGID, e.EVENTTIME\
+      from (select SESSIONID, DIMDATEKEY\
+            from EVENT.EVENTS\
+            where DIMDATEKEY = 20180611 and SESSIONID is not NULL\
+            and SESSIONID <> '00000000-0000-0000-0000-000000000000' and\
+            contains(REFERRINGURL, 'google.com') and EVENTTYPE = 'Posting Detail Impression') as a\
+       left join (select * from EVENT.EVENTS\
+                  where DIMDATEKEY = 20180611 and SESSIONID is not NULL\
+                  and SESSIONID <> '00000000-0000-0000-0000-000000000000') as e\
+      on a.SESSIONID = e.SESSIONID) as j\
+group by --SESSIONID, DIMDATEKEY\
+DIMDATEKEY;\
+--order by 4, 3;\
+\
+\
+------------------------------------------------------------------------------------------------------------------------------------\
+// THIS IS THE BOUNCE RATE FOR ALL GOOGLE SESSIONS!!!!!!!!!!!!!\
+\
+select final.DIMDATEKEY,\
+    count(case\
+          when NUM_PAGE_VIEW = NUM_OPENED_WINDOWS_GOOGLE then NUM_PAGE_VIEW\
+          when (NUM_OPENED_WINDOWS_GOOGLE > 1 \
+                and NUM_PAGE_VIEW > NUM_OPENED_WINDOWS_GOOGLE\
+                and (2 * NUM_OPENED_WINDOWS_GOOGLE > NUM_PAGE_VIEW)) then 2 * NUM_OPENED_WINDOWS_GOOGLE - NUM_PAGE_VIEW\
+          end) as BOUNCE_SESSION_GOOGLE,\
+    count(case\
+          when NUM_OPENED_WINDOWS_GOOGLE = 1 and NUM_PAGE_VIEW > 1 then 1\
+          when (NUM_OPENED_WINDOWS_GOOGLE > 1 \
+                and NUM_PAGE_VIEW > NUM_OPENED_WINDOWS_GOOGLE \
+                and (2 * NUM_OPENED_WINDOWS_GOOGLE > NUM_PAGE_VIEW)) then NUM_PAGE_VIEW - NUM_OPENED_WINDOWS_GOOGLE\
+          when (NUM_OPENED_WINDOWS_GOOGLE > 1 \
+                and NUM_PAGE_VIEW > NUM_OPENED_WINDOWS_GOOGLE \
+                and (2 * NUM_OPENED_WINDOWS_GOOGLE < NUM_PAGE_VIEW)) then NUM_OPENED_WINDOWS_GOOGLE\
+          end) as NO_BOUNCE_SESSION_GOOGLE\
+from (select SESSIONID, DIMDATEKEY,\
+        count(case when EVENTTYPE = 'Page View' then 1 end) as NUM_PAGE_VIEW,\
+        count(case when contains(REFERRINGURL, 'google.com') \
+              and EVENTTYPE = 'Page View' then 1 end) as NUM_OPENED_WINDOWS_GOOGLE--,\
+        --count(case when POSTINGID is NULL then 0 else array_size(split(POSTINGID, ',')) end) as NUM_POSTING\
+from (select a.SESSIONID, a.DIMDATEKEY, e.EVENTTYPE, e.PLACEMENT, e.REFERRINGURL, e.POSTINGID, e.EVENTTIME\
+      from (select SESSIONID, DIMDATEKEY\
+            from EVENT.EVENTS\
+            where DIMDATEKEY >= 20180604 and SESSIONID is not NULL\
+            and SESSIONID <> '00000000-0000-0000-0000-000000000000' and\
+            contains(REFERRINGURL, 'google.com') \
+            and (EVENTTYPE = 'Posting Detail Impression' or EVENTTYPE = 'Search')) as a\
+       left join (select * from EVENT.EVENTS\
+                  where DIMDATEKEY >= 20180604 and SESSIONID is not NULL\
+                  and SESSIONID <> '00000000-0000-0000-0000-000000000000') as e\
+      on a.SESSIONID = e.SESSIONID) as j\
+group by SESSIONID, DIMDATEKEY) as final\
+group by 1\
+order by 1;\
+\
+\
+------------------------------------------------------------------------------------------------------------------------------------\
+// THIS IS BOUNCE RATE FOR ALL SESSIONS OTHER THAN GOOGLE-INITIATED ONES!!!!!!!!!\
+\
+select a.DIMDATEKEY,\
+    count(case when NUM_PAGE_VIEW > 1 then 1 end) as NO_BOUNCE_SESSION_NON_GOOGLE,\
+    count(case when NUM_PAGE_VIEW <= 1 then 1 end) as BOUNCE_SESSION_NON_GOOGLE\
+from (select SESSIONID, DIMDATEKEY,\
+        count(case when EVENTTYPE = 'Page View' then 1 end) as NUM_PAGE_VIEW\
+      from EVENT.EVENTS \
+      where DIMDATEKEY >= 20180609 and SESSIONID is not NULL \
+      and SESSIONID<>'00000000-0000-0000-0000-000000000000' and not contains(REFERRINGURL, 'google.com')\
+      and (EVENTTYPE = 'Search' or EVENTTYPE = 'Posting Detail Impression' or EVENTTYPE = 'Page View')\
+      group by SESSIONID, DIMDATEKEY) as a\
+group by 1;\
+\
+------------------------------------------------------------------------------------------------------------------------------------\
+\
+select * from event.events where dimdatekey = 20180610 and source <> 'PeopleMatter' and source <> 'JSMPI' order by sessionid, eventtime;\
+\
+------------------------------------------------------------------------------------------------------------------------------------\
+// ASSESSING BOUNCE RATE FOR TRAFFIC INCOMING FROM CAREER PAGES\
+select userguid, eventtime, eventtype, placement, postingid\
+from event.events where DIMDATEKEY = 20180604 and source = 'Career Pages' order by userguid, eventtime;\
+\
+select dimdatekey, count(distinct sessionid),\
+count (case when source = 'Career Pages' then 1 end) as career_pages,\
+count (case when source <> 'Career Pages' then 1 end) as other\
+from event.events where DIMDATEKEY = 20180604 group by dimdatekey;\
+\
+\
+select final.DIMDATEKEY,\
+    count(case when NUM_PAGE_VIEW <= 1 or (NUM_PAGE_VIEW > 1 and NUM_POSTING <= NUM_PAGE_VIEW)\
+          then 1 end) as BOUNCE_USER,\
+    count(case when NUM_PAGE_VIEW > 1 and NUM_POSTING > NUM_PAGE_VIEW then 1 end) as NO_BOUNCE_USER\
+from (select SESSIONID, DIMDATEKEY,\
+        count(case when EVENTTYPE = 'Page View' then 1 end) as NUM_PAGE_VIEW,\
+        count(case when POSTINGID is NULL then 0 else array_size(split(POSTINGID, ',')) end) as NUM_POSTING\
+        from (select a.SESSIONID, a.DIMDATEKEY, e.EVENTTYPE, e.PLACEMENT, e.REFERRINGURL, e.POSTINGID, e.EVENTTIME\
+            from (select SESSIONID, DIMDATEKEY\
+                  from EVENT.EVENTS\
+                  where DIMDATEKEY >= 20180604 and SESSIONID is not NULL \
+                  and SESSIONID <> '00000000-0000-0000-0000-000000000000'\
+                  and SOURCE = 'Career Pages')-- and EVENTTYPE = 'Posting Detail Impression') as a\
+                  as a\
+            left join (select * from EVENT.EVENTS\
+                       where DIMDATEKEY >= 20180604 and SESSIONID is not NULL\
+                       and SESSIONID <> '00000000-0000-0000-0000-000000000000') as e\
+            on a.SESSIONID = e.SESSIONID) as j\
+      group by SESSIONID, DIMDATEKEY) as final \
+group by 1\
+order by 1;}
